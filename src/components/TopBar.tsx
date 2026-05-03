@@ -1,8 +1,10 @@
-import { Search, ChevronDown, Star, Settings, LogOut } from "lucide-react";
+import { Search, ChevronDown, Star, Settings, LogOut, Sun, Moon } from "lucide-react";
 import { useState, useRef, useEffect } from "react";
 import { NotificationsDropdown } from "@/components/NotificationsDropdown";
-import { currentUser } from "@/data/mockData";
+import { useCurrentUser } from "@/hooks/useProfiles";
+import { supabase } from "@/lib/supabase";
 import { cn } from "@/lib/utils";
+import { useTheme } from "@/hooks/useTheme";
 
 interface TopBarProps {
   title?: string;
@@ -12,9 +14,16 @@ export function TopBar({ title }: TopBarProps) {
   const [search, setSearch] = useState("");
   const [menuOpen, setMenuOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
+  const { theme, toggleTheme } = useTheme();
+  const { data: currentUser, isLoading } = useCurrentUser();
 
-  const firstName = currentUser.name.split(" ")[0];
-  const initials = currentUser.name.split(" ").map((n) => n[0]).join("");
+  const firstName = currentUser?.name?.split(" ")[0] || "Carregando...";
+  const initials = currentUser?.name?.split(" ").map((n) => n[0]).join("") || "--";
+
+  const handleLogout = async () => {
+    await supabase.auth.signOut();
+    window.location.reload();
+  };
 
   useEffect(() => {
     const handleClick = (e: MouseEvent) => {
@@ -47,6 +56,13 @@ export function TopBar({ title }: TopBarProps) {
 
       {/* Right: notifications + avatar + name */}
       <div className="flex items-center gap-3 shrink-0">
+        <button
+          onClick={toggleTheme}
+          className="h-8 w-8 flex items-center justify-center rounded-lg text-muted-foreground hover:bg-muted transition-colors"
+          title={theme === "light" ? "Mudar para modo escuro" : "Mudar para modo claro"}
+        >
+          {theme === "light" ? <Moon className="h-4 w-4" /> : <Sun className="h-4 w-4" />}
+        </button>
         <NotificationsDropdown />
 
         {/* User menu */}
@@ -66,9 +82,9 @@ export function TopBar({ title }: TopBarProps) {
             <div className="absolute right-0 top-full mt-1 w-64 bg-card border border-border rounded-xl shadow-xl z-50 overflow-hidden animate-slide-up">
               {/* User info */}
               <div className="px-4 py-3 border-b border-border">
-                <p className="text-[13px] font-semibold text-foreground">{currentUser.name}</p>
-                <p className="text-[11px] text-muted-foreground">{currentUser.email}</p>
-                {currentUser.rating && (
+                <p className="text-[13px] font-semibold text-foreground">{currentUser?.name || "Usuário"}</p>
+                <p className="text-[11px] text-muted-foreground">{currentUser?.email || ""}</p>
+                {currentUser?.rating && (
                   <div className="flex items-center gap-1.5 mt-2">
                     <Star className="h-3.5 w-3.5 text-status-warning" />
                     <span className={cn(
@@ -86,7 +102,7 @@ export function TopBar({ title }: TopBarProps) {
                 <button className="w-full px-4 py-2 flex items-center gap-2 text-[12px] text-muted-foreground hover:bg-muted transition-colors">
                   <Settings className="h-3.5 w-3.5" /> Configurações
                 </button>
-                <button className="w-full px-4 py-2 flex items-center gap-2 text-[12px] text-muted-foreground hover:bg-muted transition-colors">
+                <button onClick={handleLogout} className="w-full px-4 py-2 flex items-center gap-2 text-[12px] text-muted-foreground hover:bg-muted transition-colors">
                   <LogOut className="h-3.5 w-3.5" /> Sair
                 </button>
               </div>

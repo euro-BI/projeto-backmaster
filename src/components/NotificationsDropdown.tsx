@@ -1,14 +1,16 @@
 import { useNavigate } from "react-router-dom";
 import { Bell, MessageSquare, ArrowRightLeft, UserPlus, Check, CheckCheck } from "lucide-react";
 import { useState, useRef, useEffect } from "react";
-import { mockNotifications } from "@/data/mockData";
+import { useNotifications, useMarkNotificationRead, useMarkAllNotificationsRead } from "@/hooks/useNotifications";
 import { formatTimeAgo } from "@/lib/ticket-utils";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 
 export function NotificationsDropdown() {
   const [isOpen, setIsOpen] = useState(false);
-  const [notifications, setNotifications] = useState(mockNotifications);
+  const { data: notifications = [] } = useNotifications();
+  const { mutate: markNotificationRead } = useMarkNotificationRead();
+  const { mutate: markAllNotificationsRead } = useMarkAllNotificationsRead();
   const ref = useRef<HTMLDivElement>(null);
   const navigate = useNavigate();
 
@@ -33,12 +35,11 @@ export function NotificationsDropdown() {
 
   const markRead = (id: string, e: React.MouseEvent) => {
     e.stopPropagation();
-    setNotifications((prev) => prev.map((n) => n.id === id ? { ...n, read: true } : n));
+    markNotificationRead(id);
   };
 
   const markAllRead = () => {
-    setNotifications((prev) => prev.map((n) => ({ ...n, read: true })));
-    toast.success("Todas marcadas como lidas");
+    markAllNotificationsRead();
   };
 
   return (

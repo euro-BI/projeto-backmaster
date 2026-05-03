@@ -1,7 +1,2 @@
-import { useEffect } from "react";
-
-export function useTheme() {
-  useEffect(() => {
-    document.documentElement.classList.add("dark");
-  }, []);
-}
+export { useTheme } from "@/components/ThemeProvider";
+export type { Theme } from "@/components/ThemeProvider";

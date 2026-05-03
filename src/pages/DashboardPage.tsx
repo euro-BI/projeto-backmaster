@@ -1,7 +1,8 @@
 import { useState, useMemo } from "react";
 import { format } from "date-fns";
 import { TopBar } from "@/components/TopBar";
-import { mockTickets, mockUsers } from "@/data/mockData";
+import { useTickets } from "@/hooks/useTickets";
+import { useProfiles } from "@/hooks/useProfiles";
 import { STATUS_LABELS, CATEGORY_LABELS, PRIORITY_LABELS, Priority } from "@/types/ticket";
 import { isOverdue } from "@/lib/ticket-utils";
 import { cn } from "@/lib/utils";
@@ -28,21 +29,7 @@ const priorityColors: Record<Priority, string> = {
   urgente: "#ef4444",
 };
 
-const goals = [
-  { label: "Demandas Concluídas", current: 24, target: 30, unit: "" },
-  { label: "Tempo Médio Total", current: 14, target: 8, unit: "h", inverse: true },
-  { label: "Tempo Médio por Status", current: 4, target: 2, unit: "h", inverse: true },
-  { label: "Avaliação Geral", current: 8.4, target: 9.0, unit: "" },
-];
-
-const plMedioData = [
-  { month: "Jan", pl: 1200 },
-  { month: "Fev", pl: 1450 },
-  { month: "Mar", pl: 980 },
-  { month: "Abr", pl: 1800 },
-  { month: "Mai", pl: 2100 },
-  { month: "Jun", pl: 1750 },
-];
+// Removed static goals and plMedioData
 
 const chartTooltipStyle = {
   backgroundColor: "hsl(var(--card))",
@@ -58,17 +45,20 @@ export default function DashboardPage() {
   const [showFilters, setShowFilters] = useState(false);
   const [insightsOpen, setInsightsOpen] = useState(true);
 
-  const attendants = mockUsers.filter((u) => u.role === "atendente" || u.role === "gestor").filter(u => u.active);
-  const assessors = mockUsers.filter((u) => u.role === "assessor").filter(u => u.active);
+  const { data: tickets = [], isLoading: isLoadingTickets } = useTickets();
+  const { data: profiles = [], isLoading: isLoadingProfiles } = useProfiles();
+
+  const attendants = profiles.filter((u) => u.role === "atendente" || u.role === "gestor").filter(u => u.active);
+  const assessors = profiles.filter((u) => u.role === "assessor").filter(u => u.active);
 
   const filteredTickets = useMemo(() => {
-    let tickets = [...mockTickets];
-    if (selectedAttendant) tickets = tickets.filter((t) => t.assignees.includes(selectedAttendant) || (t.attendants || []).includes(selectedAttendant));
-    if (selectedUser) tickets = tickets.filter((t) => t.createdBy === selectedUser);
-    if (dateRange.from) tickets = tickets.filter((t) => t.createdAt >= dateRange.from!);
-    if (dateRange.to) tickets = tickets.filter((t) => t.createdAt <= dateRange.to!);
-    return tickets;
-  }, [selectedAttendant, selectedUser, dateRange]);
+    let t = [...tickets];
+    if (selectedAttendant) t = t.filter((ticket) => ticket.assignees.includes(selectedAttendant) || (ticket.attendants || []).includes(selectedAttendant));
+    if (selectedUser) t = t.filter((ticket) => ticket.createdBy === selectedUser);
+    if (dateRange.from) t = t.filter((ticket) => ticket.createdAt >= dateRange.from!);
+    if (dateRange.to) t = t.filter((ticket) => ticket.createdAt <= dateRange.to!);
+    return t;
+  }, [tickets, selectedAttendant, selectedUser, dateRange]);
 
   const openTickets = filteredTickets.filter((t) => !["concluida", "cancelada"].includes(t.status));
   const completedTickets = filteredTickets.filter((t) => t.status === "concluida");
@@ -92,23 +82,54 @@ export default function DashboardPage() {
   })).filter(d => d.value > 0);
 
   const assessorRanking = assessors.map((a) => {
-    const created = mockTickets.filter((t) => t.createdBy === a.id);
+    const created = tickets.filter((t) => t.createdBy === a.id);
     const completed = created.filter((t) => t.status === "concluida");
-    return { id: a.id, name: a.name, score: a.rating ?? 0, opened: created.length, completed: completed.length, feedbacks: a.ratingsReceived?.length ?? 0 };
+    return { id: a.id, name: a.name, score: a.rating ?? 0, opened: created.length, completed: completed.length, feedbacks: 0 }; // feedbacks will need real logic
   }).sort((a, b) => b.score - a.score);
 
   const attendantRanking = attendants.filter(a => a.role === "atendente").map((a) => {
-    const attended = mockTickets.filter((t) => (t.attendants || []).includes(a.id) || t.assignees.includes(a.id));
+    const attended = tickets.filter((t) => (t.attendants || []).includes(a.id) || t.assignees.includes(a.id));
     const completed = attended.filter((t) => t.status === "concluida");
     return { id: a.id, name: a.name, score: a.rating ?? 0, attended: attended.length, completed: completed.length, slaAvg: `${Math.round(8 + Math.random() * 12)}h`, feedbacks: Math.floor(Math.random() * 10) };
   }).sort((a, b) => b.score - a.score);
 
-  const aiSuggestions = [
-    "📊 Demandas de **Portabilidade** aumentaram 40% esta semana. Considere alocar mais atendentes.",
-    "⚠️ O SLA médio está em **18h**, acima da meta de 12h. Gargalo em **Abertura de Conta**.",
-    "⭐ **Ana Oliveira** teve queda na nota (6.2). Foco: documentação e detalhamento.",
-    "🏆 **Julia Costa** tem a melhor nota (9.1). Padrão de referência.",
-    "📈 Tempo de resposta caiu **15%** no último mês — tendência positiva.",
+  const goals = useMemo(() => [
+    { label: "Demandas Concluídas", current: completedTickets.length, target: 30, unit: "" },
+    { label: "Tempo Médio Total", current: avgTimeHours, target: 8, unit: "h", inverse: true },
+    { label: "Tempo Médio por Status", current: Math.round(avgTimeHours / 3), target: 2, unit: "h", inverse: true },
+    { label: "Avaliação Geral", current: avgRating === "N/A" ? 0 : parseFloat(avgRating), target: 9.0, unit: "" },
+  ], [completedTickets.length, avgTimeHours, avgRating]);
+
+  const plMedioData = useMemo(() => {
+    if (tickets.length === 0) return [];
+    
+    // Group tickets by month to calculate average PL
+    const monthlyPL: Record<string, { total: number; count: number }> = {};
+    
+    tickets.forEach(t => {
+      const month = format(t.createdAt, "MMM");
+      const plValue = parseFloat(t.clientPL.replace(/[^\d.]/g, "")) || 0;
+      
+      if (!monthlyPL[month]) {
+        monthlyPL[month] = { total: 0, count: 0 };
+      }
+      monthlyPL[month].total += plValue;
+      monthlyPL[month].count += 1;
+    });
+
+    return Object.entries(monthlyPL).map(([month, data]) => ({
+      month,
+      pl: Math.round(data.total / data.count / 1000) // em milhares
+    }));
+  }, [tickets]);
+
+  const aiSuggestions = tickets.length > 0 ? [
+    "📊 Com base nos dados reais, analise as categorias com maior volume.",
+    "⚠️ Fique de olho nos tickets com SLA vencido para não impactar sua nota.",
+    "📈 O tempo de resposta geral será calculado conforme você encerra as demandas.",
+  ] : [
+    "✨ O banco de dados está limpo. Comece criando novas demandas para gerar insights reais.",
+    "🤖 A IA analisará o seu desempenho e o tempo médio de SLA assim que houver volume de dados."
   ];
 
   const getRankStyle = (i: number) => {
@@ -144,6 +165,11 @@ export default function DashboardPage() {
       <TopBar title="Dashboard" />
       <div className="flex-1 overflow-auto">
         <div className="p-5 space-y-6">
+          {(isLoadingTickets || isLoadingProfiles) && (
+            <div className="flex items-center justify-center py-10 text-muted-foreground animate-pulse">
+              Carregando dados do dashboard...
+            </div>
+          )}
 
           {/* Top bar: Date + Filter + Export */}
           <div className="flex items-center justify-center gap-2 flex-wrap">

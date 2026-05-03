@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { TopBar } from "@/components/TopBar";
-import { mockUsers } from "@/data/mockData";
-import { CATEGORY_LABELS, Category, CARGO_LABELS, UserCargo, User } from "@/types/ticket";
+import { useProfiles, useUpdateProfileStatus, useAuthUsersWithoutProfile, useCreateProfile } from "@/hooks/useProfiles";
+import { CATEGORY_LABELS, Category, CARGO_LABELS, UserCargo, User, UserRole } from "@/types/ticket";
 import { cn } from "@/lib/utils";
 import { Users, FileText, Plus, Edit2, Trash2, X, ChevronDown, ChevronUp } from "lucide-react";
 import { toast } from "sonner";
@@ -38,17 +38,22 @@ export default function SettingsPage() {
   const [newFieldLabel, setNewFieldLabel] = useState("");
   const [showNewUserModal, setShowNewUserModal] = useState(false);
   const [deleteUser, setDeleteUser] = useState<User | null>(null);
-  const [newUser, setNewUser] = useState({ name: "", surname: "", email: "", birthDate: "", cargos: [] as UserCargo[] });
+  const [newUser, setNewUser] = useState({ authId: "", email: "", name: "", role: "assessor" as UserRole, cargos: [] as UserCargo[] });
 
   const tabs = [
     { key: "users" as Tab, label: "Usuários", icon: Users },
     { key: "demands" as Tab, label: "Demandas", icon: FileText },
   ];
 
-  const gestores = mockUsers.filter(u => u.role === "gestor" && u.active);
-  const atendentes = mockUsers.filter(u => u.role === "atendente" && u.active);
-  const assessores = mockUsers.filter(u => u.role === "assessor" && u.active);
-  const excluidos = mockUsers.filter(u => !u.active);
+  const { data: profiles = [], isLoading } = useProfiles();
+  const { mutate: updateStatus } = useUpdateProfileStatus();
+  const { data: authUsers = [], isLoading: isLoadingAuthUsers } = useAuthUsersWithoutProfile();
+  const { mutate: createProfile, isPending: isCreating } = useCreateProfile();
+
+  const gestores = profiles.filter(u => u.role === "gestor" && u.active);
+  const atendentes = profiles.filter(u => u.role === "atendente" && u.active);
+  const assessores = profiles.filter(u => u.role === "assessor" && u.active);
+  const excluidos = profiles.filter(u => !u.active);
 
   const addField = () => {
     if (!newFieldLabel.trim()) return;
@@ -78,19 +83,32 @@ export default function SettingsPage() {
   };
 
   const handleCreateUser = () => {
-    if (!newUser.name.trim() || !newUser.email.trim() || newUser.cargos.length === 0) {
+    if (!newUser.authId || !newUser.name.trim() || !newUser.role || newUser.cargos.length === 0) {
       toast.error("Preencha todos os campos obrigatórios");
       return;
     }
-    toast.success(`Usuário ${newUser.name} ${newUser.surname} criado com sucesso!`);
-    setShowNewUserModal(false);
-    setNewUser({ name: "", surname: "", email: "", birthDate: "", cargos: [] });
+    
+    createProfile({
+      id: newUser.authId,
+      email: newUser.email,
+      name: newUser.name,
+      role: newUser.role,
+      cargos: newUser.cargos,
+    }, {
+      onSuccess: () => {
+        setShowNewUserModal(false);
+        setNewUser({ authId: "", email: "", name: "", role: "assessor", cargos: [] });
+      }
+    });
   };
 
   const handleDeleteUser = () => {
     if (deleteUser) {
-      toast.success(`${deleteUser.name} removido com sucesso.`);
-      setDeleteUser(null);
+      updateStatus({ id: deleteUser.id, active: false }, {
+        onSuccess: () => {
+          setDeleteUser(null);
+        }
+      });
     }
   };
 
@@ -162,8 +180,14 @@ export default function SettingsPage() {
             ))}
           </div>
 
+          {isLoading && (
+            <div className="flex items-center justify-center py-10 text-muted-foreground animate-pulse">
+              Carregando dados...
+            </div>
+          )}
+
           {/* Users tab */}
-          {tab === "users" && (
+          {!isLoading && tab === "users" && (
             <div className="space-y-4">
               <div className="flex justify-end">
                 <button onClick={() => setShowNewUserModal(true)} className="px-3 py-1.5 rounded-full text-[11px] font-medium bg-primary text-primary-foreground hover:bg-primary/90 transition-colors flex items-center gap-1">
@@ -178,7 +202,7 @@ export default function SettingsPage() {
           )}
 
           {/* Demands tab */}
-          {tab === "demands" && (
+          {!isLoading && tab === "demands" && (
             <div className="space-y-4">
               <div className="bg-card rounded-xl border border-border p-4 shadow-soft">
                 <h2 className="text-[13px] font-semibold text-foreground mb-3">Tipos de Demanda</h2>
@@ -257,26 +281,46 @@ export default function SettingsPage() {
             <DialogTitle className="text-sm">Novo Usuário</DialogTitle>
           </DialogHeader>
           <div className="space-y-3 mt-2">
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <label className="block text-[11px] font-medium text-muted-foreground mb-1">Nome *</label>
-                <input value={newUser.name} onChange={(e) => setNewUser({...newUser, name: e.target.value})} className="w-full h-9 px-3 text-[13px] bg-muted rounded-lg border-0 text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-ring" placeholder="Nome" />
-              </div>
-              <div>
-                <label className="block text-[11px] font-medium text-muted-foreground mb-1">Sobrenome</label>
-                <input value={newUser.surname} onChange={(e) => setNewUser({...newUser, surname: e.target.value})} className="w-full h-9 px-3 text-[13px] bg-muted rounded-lg border-0 text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-ring" placeholder="Sobrenome" />
-              </div>
+            <div>
+              <label className="block text-[11px] font-medium text-muted-foreground mb-1">E-mail (Auth) *</label>
+              {isLoadingAuthUsers ? (
+                <div className="w-full h-9 px-3 text-[13px] bg-muted rounded-lg flex items-center text-muted-foreground">Carregando e-mails...</div>
+              ) : authUsers.length === 0 ? (
+                <div className="w-full h-9 px-3 text-[13px] bg-muted rounded-lg flex items-center text-muted-foreground border border-status-warning/30">Nenhum usuário sem perfil encontrado.</div>
+              ) : (
+                <select 
+                  value={newUser.authId} 
+                  onChange={(e) => {
+                    const selected = authUsers.find(u => u.id === e.target.value);
+                    setNewUser({...newUser, authId: e.target.value, email: selected?.email || ""});
+                  }} 
+                  className="w-full h-9 px-2 text-[13px] bg-muted rounded-lg border-0 text-foreground focus:outline-none focus:ring-1 focus:ring-ring"
+                >
+                  <option value="" disabled>Selecione um e-mail cadastrado no Auth</option>
+                  {authUsers.map(u => (
+                    <option key={u.id} value={u.id}>{u.email}</option>
+                  ))}
+                </select>
+              )}
             </div>
             <div>
-              <label className="block text-[11px] font-medium text-muted-foreground mb-1">E-mail *</label>
-              <input value={newUser.email} onChange={(e) => setNewUser({...newUser, email: e.target.value})} type="email" className="w-full h-9 px-3 text-[13px] bg-muted rounded-lg border-0 text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-ring" placeholder="email@backmaster.com" />
+              <label className="block text-[11px] font-medium text-muted-foreground mb-1">Nome Completo *</label>
+              <input value={newUser.name} onChange={(e) => setNewUser({...newUser, name: e.target.value})} className="w-full h-9 px-3 text-[13px] bg-muted rounded-lg border-0 text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-ring" placeholder="Nome" />
             </div>
             <div>
-              <label className="block text-[11px] font-medium text-muted-foreground mb-1">Data de Nascimento</label>
-              <input value={newUser.birthDate} onChange={(e) => setNewUser({...newUser, birthDate: e.target.value})} type="date" className="w-full h-9 px-3 text-[13px] bg-muted rounded-lg border-0 text-foreground focus:outline-none focus:ring-1 focus:ring-ring" />
+              <label className="block text-[11px] font-medium text-muted-foreground mb-1">Função (Role) *</label>
+              <select 
+                value={newUser.role} 
+                onChange={(e) => setNewUser({...newUser, role: e.target.value as UserRole})} 
+                className="w-full h-9 px-2 text-[13px] bg-muted rounded-lg border-0 text-foreground focus:outline-none focus:ring-1 focus:ring-ring"
+              >
+                <option value="assessor">Assessor</option>
+                <option value="atendente">Atendente</option>
+                <option value="gestor">Gestor</option>
+              </select>
             </div>
             <div>
-              <label className="block text-[11px] font-medium text-muted-foreground mb-1">Cargos *</label>
+              <label className="block text-[11px] font-medium text-muted-foreground mb-1">Cargos/Especialidades *</label>
               <div className="flex flex-wrap gap-1.5">
                 {allCargos.map(c => (
                   <button key={c} type="button" onClick={() => toggleCargo(c)} className={cn("px-2.5 py-1 rounded-full text-[10px] font-medium border transition-colors", newUser.cargos.includes(c) ? "bg-primary text-primary-foreground border-primary" : "bg-muted text-muted-foreground border-transparent hover:border-border")}>
@@ -289,8 +333,8 @@ export default function SettingsPage() {
               <button type="button" onClick={() => setShowNewUserModal(false)} className="flex-1 h-9 rounded-lg text-[13px] font-medium bg-muted text-muted-foreground hover:bg-accent transition-colors">
                 Cancelar
               </button>
-              <button type="button" onClick={handleCreateUser} className="flex-1 h-9 rounded-lg text-[13px] font-medium bg-primary text-primary-foreground hover:bg-primary/90 transition-colors">
-                Criar Usuário
+              <button type="button" onClick={handleCreateUser} disabled={isCreating || !newUser.authId} className="flex-1 h-9 rounded-lg text-[13px] font-medium bg-primary text-primary-foreground hover:bg-primary/90 transition-colors disabled:opacity-50">
+                {isCreating ? "Criando..." : "Criar Perfil"}
               </button>
             </div>
           </div>

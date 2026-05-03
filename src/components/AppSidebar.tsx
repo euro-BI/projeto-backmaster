@@ -9,7 +9,8 @@ import {
   ChevronRight,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
-import logoImg from "@/assets/Logo_BackMaster.png";
+
+const logoImg = "https://rzdepoejfchewvjzojan.supabase.co/storage/v1/object/public/backmaster/bm_logo.png";
 
 const navItems = [
   { icon: Inbox, label: "Demandas", path: "/" },
