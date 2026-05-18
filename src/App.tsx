@@ -5,6 +5,8 @@ import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { AppLayout } from "@/components/AppLayout";
 import { ThemeProvider } from "@/components/ThemeProvider";
+import { ProtectedRoute } from "@/components/ProtectedRoute";
+import LoginPage from "@/pages/LoginPage";
 import DemandsPage from "@/pages/DemandsPage";
 import PortalPage from "@/pages/PortalPage";
 import TicketDetailPage from "@/pages/TicketDetailPage";
@@ -22,13 +24,21 @@ const App = () => (
         <Sonner />
         <BrowserRouter>
           <Routes>
-            <Route element={<AppLayout />}>
-              <Route path="/" element={<DemandsPage />} />
-              <Route path="/portal" element={<PortalPage />} />
-              <Route path="/ticket/:id" element={<TicketDetailPage />} />
-              <Route path="/dashboard" element={<DashboardPage />} />
-              <Route path="/settings" element={<SettingsPage />} />
+            {/* Public Routes */}
+            <Route path="/login" element={<LoginPage />} />
+
+            {/* Protected Routes */}
+            <Route element={<ProtectedRoute />}>
+              <Route element={<AppLayout />}>
+                <Route path="/" element={<DemandsPage />} />
+                <Route path="/portal" element={<PortalPage />} />
+                <Route path="/ticket/:id" element={<TicketDetailPage />} />
+                <Route path="/dashboard" element={<DashboardPage />} />
+                <Route path="/settings" element={<SettingsPage />} />
+              </Route>
             </Route>
+
+            {/* Fallback */}
             <Route path="*" element={<NotFound />} />
           </Routes>
         </BrowserRouter>
@@ -38,3 +48,4 @@ const App = () => (
 );
 
 export default App;
+

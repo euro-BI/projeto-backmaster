@@ -1,7 +1,25 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { supabase } from "@/lib/supabase";
-import { User, UserRole, UserCargo } from "@/types/ticket";
+import { Area, User, UserRole, UserCargo } from "@/types/ticket";
 import { toast } from "sonner";
+
+function getErrorMessage(error: unknown) {
+  if (error instanceof Error) return error.message;
+  if (typeof error === "object" && error) {
+    const e = error as { message?: unknown; details?: unknown; hint?: unknown };
+    const parts = [e.message, e.details, e.hint].filter((p) => typeof p === "string" && p.trim().length > 0) as string[];
+    if (parts.length > 0) return parts.join(" — ");
+  }
+  if (typeof error === "string") return error;
+  return "Erro desconhecido";
+}
+
+function isMissingRpcFunction(error: unknown) {
+  const e = error as { code?: unknown; message?: unknown };
+  if (typeof e?.code === "string" && e.code === "PGRST202") return true;
+  if (typeof e?.message === "string" && e.message.toLowerCase().includes("could not find the function")) return true;
+  return false;
+}
 
 export function useProfiles() {
   return useQuery({
@@ -17,16 +35,54 @@ export function useProfiles() {
         throw error;
       }
       
-      return data.map((p: any) => ({
+      const rows = (data ?? []) as Array<{
+        id: string;
+        name: string;
+        email: string;
+        role: string;
+        cargos: UserCargo[] | null;
+        xp_code: string | null;
+        area: Area | null;
+        rating: number | null;
+        active: boolean | null;
+        avatar_url: string | null;
+      }>;
+
+      const xpCodes = Array.from(
+        new Set(
+          rows
+            .map((p) => (p.xp_code ?? "").trim().toUpperCase())
+            .filter((value) => value.length > 0)
+        )
+      );
+
+      const avatarByXpCode = new Map<string, string>();
+      if (xpCodes.length > 0) {
+        const { data: colaboradores, error: colError } = await supabase
+          .from("dados_colaboradores")
+          .select("cod_assessor,foto_url")
+          .in("cod_assessor", xpCodes);
+
+        if (!colError) {
+          for (const row of colaboradores ?? []) {
+            const code = String((row as { cod_assessor?: string | null }).cod_assessor ?? "").trim().toUpperCase();
+            const photo = (row as { foto_url?: string | null }).foto_url ?? "";
+            if (code && photo) avatarByXpCode.set(code, photo);
+          }
+        }
+      }
+
+      return rows.map((p) => ({
         id: p.id,
         name: p.name,
         email: p.email,
         role: p.role as UserRole,
         cargos: p.cargos || [],
-        area: p.area,
-        rating: p.rating,
+        xpCode: p.xp_code ?? undefined,
+        area: p.area ?? undefined,
+        rating: p.rating ?? undefined,
         active: p.active ?? true,
-        avatar: p.avatar_url,
+        avatar: avatarByXpCode.get((p.xp_code ?? "").trim().toUpperCase()) ?? p.avatar_url ?? undefined,
       })) as User[];
     },
   });
@@ -49,6 +105,19 @@ export function useCurrentUser() {
         console.error("Error fetching current user profile:", error);
         return null;
       }
+
+      let avatarFromColaboradores: string | null = null;
+      if (data.xp_code && String(data.xp_code).trim().length > 0) {
+        const { data: colaboradores, error: colError } = await supabase
+          .from("dados_colaboradores")
+          .select("foto_url")
+          .ilike("cod_assessor", data.xp_code)
+          .limit(1);
+
+        if (!colError && Array.isArray(colaboradores) && colaboradores.length > 0) {
+          avatarFromColaboradores = colaboradores[0]?.foto_url ?? null;
+        }
+      }
       
       return {
         id: data.id,
@@ -56,10 +125,11 @@ export function useCurrentUser() {
         email: data.email,
         role: data.role as UserRole,
         cargos: data.cargos || [],
+        xpCode: data.xp_code ?? undefined,
         area: data.area,
         rating: data.rating,
         active: data.active ?? true,
-        avatar: data.avatar_url,
+        avatar: avatarFromColaboradores ?? data.avatar_url,
       } as User;
     },
   });
@@ -86,32 +156,41 @@ export function useAuthUsersWithoutProfile() {
   });
 }
 
-// Hook para criar um perfil (inserir na bm_profiles)
+// Hook para criar um perfil via RPC (contorna o RLS usando SECURITY DEFINER)
 export function useCreateProfile() {
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: async (newProfile: { id: string; email: string; name: string; role: string; cargos: string[] }) => {
-      const { error } = await supabase
-        .from("bm_profiles")
-        .insert([{
-          id: newProfile.id,
-          email: newProfile.email,
-          name: newProfile.name,
-          role: newProfile.role,
-          cargos: newProfile.cargos,
-          active: true,
-        }]);
+    mutationFn: async (newProfile: { id: string; email: string; name: string; role: UserRole; cargos: UserCargo[]; xpCode?: string }) => {
+      const { error } = await supabase.rpc("create_bm_profile", {
+        p_id: newProfile.id,
+        p_email: newProfile.email,
+        p_name: newProfile.name,
+        p_role: newProfile.role,
+        p_cargos: newProfile.cargos,
+      });
 
       if (error) throw error;
+
+      if (newProfile.xpCode && newProfile.xpCode.trim().length > 0) {
+        const rpc = await supabase.rpc("update_bm_profile", {
+          p_id: newProfile.id,
+          p_name: newProfile.name,
+          p_role: newProfile.role,
+          p_cargos: newProfile.cargos,
+          p_xp_code: newProfile.xpCode,
+        });
+
+        if (rpc.error) throw rpc.error;
+      }
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["profiles"] });
       queryClient.invalidateQueries({ queryKey: ["authUsersWithoutProfile"] });
       toast.success("Perfil criado com sucesso!");
     },
-    onError: (error: any) => {
-      toast.error("Erro ao criar perfil: " + error.message);
+    onError: (error: unknown) => {
+      toast.error("Erro ao criar perfil: " + getErrorMessage(error));
     },
   });
 }
@@ -132,8 +211,44 @@ export function useUpdateProfileStatus() {
       queryClient.invalidateQueries({ queryKey: ["profiles"] });
       toast.success("Status do usuário atualizado.");
     },
-    onError: (error: any) => {
-      toast.error("Erro ao atualizar usuário: " + error.message);
+    onError: (error: unknown) => {
+      toast.error("Erro ao atualizar usuário: " + getErrorMessage(error));
+    },
+  });
+}
+
+export function useUpdateProfile() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async ({ id, name, role, cargos, xpCode }: { id: string; name: string; role: UserRole; cargos: UserCargo[]; xpCode?: string }) => {
+      const rpcPayload = {
+        p_id: id,
+        p_name: name,
+        p_role: role,
+        p_cargos: cargos,
+        p_xp_code: xpCode && xpCode.trim().length > 0 ? xpCode : null,
+      };
+
+      const rpc = await supabase.rpc("update_bm_profile", rpcPayload);
+
+      if (rpc.error) {
+        if (!isMissingRpcFunction(rpc.error)) throw rpc.error;
+
+        const { error } = await supabase
+          .from("bm_profiles")
+          .update({ name, role, cargos, xp_code: rpcPayload.p_xp_code })
+          .eq("id", id);
+
+        if (error) throw error;
+      }
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["profiles"] });
+      toast.success("Usuário atualizado com sucesso!");
+    },
+    onError: (error: unknown) => {
+      toast.error("Erro ao atualizar usuário: " + getErrorMessage(error));
     },
   });
 }

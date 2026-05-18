@@ -12,17 +12,7 @@ export type UserCargo =
   | "mesa_rf"
   | "assessor";
 
-export type Category =
-  | "abertura_conta"
-  | "atualizacao_cadastral"
-  | "portabilidade"
-  | "renda_variavel"
-  | "renda_fixa"
-  | "seguros"
-  | "credito"
-  | "pj"
-  | "problema_tecnico"
-  | "outro";
+export type Category = string;
 
 export type DemandType = "normal" | "socorro" | "back";
 
@@ -43,6 +33,7 @@ export interface User {
   email: string;
   role: UserRole;
   cargos: UserCargo[];
+  xpCode?: string;
   area?: Area;
   rating?: number;
   avatar?: string;
@@ -84,6 +75,7 @@ export interface TicketNotification {
 
 export interface Ticket {
   id: string;
+  code?: string;
   title: string;
   description: string;
   category: Category;
@@ -92,6 +84,7 @@ export interface Ticket {
   priority: Priority;
   clientCode: string;
   clientPL: string;
+  extraData?: Record<string, any>;
   createdBy: string;
   createdByName: string;
   assignees: string[];
@@ -126,7 +119,7 @@ export const PRIORITY_LABELS: Record<Priority, string> = {
   urgente: "Urgente",
 };
 
-export const CATEGORY_LABELS: Record<Category, string> = {
+export const CATEGORY_LABELS: Record<string, string> = {
   abertura_conta: "Abertura de Conta",
   atualizacao_cadastral: "Atualização Cadastral",
   portabilidade: "Portabilidade de Investimentos",

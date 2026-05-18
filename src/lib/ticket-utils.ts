@@ -52,6 +52,7 @@ export function getCategoryIcon(category: Category): string {
     case "pj": return "Building2";
     case "problema_tecnico": return "AlertTriangle";
     case "outro": return "MoreHorizontal";
+    default: return "FileText";
   }
 }
 

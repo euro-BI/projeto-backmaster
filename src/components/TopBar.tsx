@@ -1,5 +1,6 @@
 import { Search, ChevronDown, Star, Settings, LogOut, Sun, Moon } from "lucide-react";
 import { useState, useRef, useEffect } from "react";
+import { useNavigate } from "react-router-dom";
 import { NotificationsDropdown } from "@/components/NotificationsDropdown";
 import { useCurrentUser } from "@/hooks/useProfiles";
 import { supabase } from "@/lib/supabase";
@@ -14,15 +15,23 @@ export function TopBar({ title }: TopBarProps) {
   const [search, setSearch] = useState("");
   const [menuOpen, setMenuOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
+  const navigate = useNavigate();
   const { theme, toggleTheme } = useTheme();
   const { data: currentUser, isLoading } = useCurrentUser();
 
   const firstName = currentUser?.name?.split(" ")[0] || "Carregando...";
   const initials = currentUser?.name?.split(" ").map((n) => n[0]).join("") || "--";
+  const avatarUrl = currentUser?.avatar;
 
   const handleLogout = async () => {
-    await supabase.auth.signOut();
-    window.location.reload();
+    try {
+      await supabase.auth.signOut();
+      navigate("/login", { replace: true });
+    } catch (error) {
+      console.error("Erro ao sair:", error);
+      // Fallback reload if navigate fails
+      window.location.href = "/login";
+    }
   };
 
   useEffect(() => {
@@ -71,9 +80,13 @@ export function TopBar({ title }: TopBarProps) {
             onClick={() => setMenuOpen(!menuOpen)}
             className="flex items-center gap-2 hover:bg-muted rounded-lg px-2 py-1 transition-colors"
           >
-            <div className="h-7 w-7 rounded-full bg-primary/20 flex items-center justify-center text-[11px] font-semibold text-primary">
-              {initials}
-            </div>
+            {avatarUrl ? (
+              <img src={avatarUrl} alt={currentUser?.name || "Avatar"} className="h-7 w-7 rounded-full object-cover" />
+            ) : (
+              <div className="h-7 w-7 rounded-full bg-primary/20 flex items-center justify-center text-[11px] font-semibold text-primary">
+                {initials}
+              </div>
+            )}
             <span className="text-[13px] font-medium text-foreground">{firstName}</span>
             <ChevronDown className="h-3 w-3 text-muted-foreground" />
           </button>

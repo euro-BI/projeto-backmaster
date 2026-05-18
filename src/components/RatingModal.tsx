@@ -40,7 +40,7 @@ export function RatingModal({ ticket, onClose, onSubmit, isAttendantRating }: Ra
             <h3 className="text-sm font-semibold text-foreground">
               {isAttendantRating ? "Avaliar Assessor" : "Avaliar Atendimento"}
             </h3>
-            <p className="text-[11px] text-muted-foreground mt-0.5">{ticket.id} — {ticket.title}</p>
+            <p className="text-[11px] text-muted-foreground mt-0.5">{ticket.code || ticket.id} — {ticket.title}</p>
           </div>
           <button onClick={onClose} className="text-muted-foreground hover:text-foreground transition-colors">
             <X className="h-4 w-4" />

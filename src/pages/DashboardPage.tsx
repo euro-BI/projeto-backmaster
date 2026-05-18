@@ -7,7 +7,7 @@ import { STATUS_LABELS, CATEGORY_LABELS, PRIORITY_LABELS, Priority } from "@/typ
 import { isOverdue } from "@/lib/ticket-utils";
 import { cn } from "@/lib/utils";
 import { BarChart, Bar, XAxis, YAxis, Tooltip as RechartsTooltip, ResponsiveContainer, PieChart, Pie, Cell, LineChart, Line } from "recharts";
-import { Sparkles, TrendingUp, TrendingDown, Clock, CheckCircle, AlertTriangle, BarChart3, Target, Award, Medal, CalendarIcon, Filter, Download, X, ChevronDown, ChevronUp } from "lucide-react";
+import { Sparkles, TrendingUp, TrendingDown, Clock, CheckCircle, AlertTriangle, BarChart3, Target, Award, Medal, CalendarIcon, Filter, Download, X } from "lucide-react";
 import { Calendar } from "@/components/ui/calendar";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { toast } from "sonner";
@@ -43,7 +43,6 @@ export default function DashboardPage() {
   const [selectedAttendant, setSelectedAttendant] = useState<string | null>(null);
   const [selectedUser, setSelectedUser] = useState<string | null>(null);
   const [showFilters, setShowFilters] = useState(false);
-  const [insightsOpen, setInsightsOpen] = useState(true);
 
   const { data: tickets = [], isLoading: isLoadingTickets } = useTickets();
   const { data: profiles = [], isLoading: isLoadingProfiles } = useProfiles();
@@ -122,15 +121,6 @@ export default function DashboardPage() {
       pl: Math.round(data.total / data.count / 1000) // em milhares
     }));
   }, [tickets]);
-
-  const aiSuggestions = tickets.length > 0 ? [
-    "📊 Com base nos dados reais, analise as categorias com maior volume.",
-    "⚠️ Fique de olho nos tickets com SLA vencido para não impactar sua nota.",
-    "📈 O tempo de resposta geral será calculado conforme você encerra as demandas.",
-  ] : [
-    "✨ O banco de dados está limpo. Comece criando novas demandas para gerar insights reais.",
-    "🤖 A IA analisará o seu desempenho e o tempo médio de SLA assim que houver volume de dados."
-  ];
 
   const getRankStyle = (i: number) => {
     if (i === 0) return "bg-status-warning/10 border-status-warning/30";
@@ -239,31 +229,7 @@ export default function DashboardPage() {
             </div>
           </div>
 
-          {/* 1. INSIGHTS DIÁRIO */}
-          <div>
-            <div className="bg-card rounded-xl border border-border shadow-soft overflow-hidden">
-              <button onClick={() => setInsightsOpen(!insightsOpen)} className="w-full px-4 py-3 flex items-center justify-between">
-                <div className="flex items-center gap-2">
-                  <Sparkles className="h-4 w-4 text-primary" />
-                  <span className="text-[13px] font-semibold text-foreground">Insights Diário</span>
-                </div>
-                {insightsOpen ? <ChevronUp className="h-4 w-4 text-muted-foreground" /> : <ChevronDown className="h-4 w-4 text-muted-foreground" />}
-              </button>
-              {insightsOpen && (
-                <div className="px-4 pb-4 animate-fade-in">
-                  <div className="grid grid-cols-1 lg:grid-cols-2 gap-2">
-                    {aiSuggestions.map((s, i) => (
-                      <div key={i} className="bg-muted/30 rounded-lg p-3 text-[12px] text-foreground leading-relaxed border border-border">
-                        {s.split("**").map((part, j) => j % 2 === 1 ? <strong key={j} className="text-primary">{part}</strong> : <span key={j}>{part}</span>)}
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-            </div>
-          </div>
-
-          {/* 2. METAS */}
+          {/* 1. METAS */}
           <div>
             <SectionTitle icon={<Target className="h-4 w-4 text-primary" />} title="Metas" />
             <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mt-3">
@@ -285,7 +251,7 @@ export default function DashboardPage() {
             </div>
           </div>
 
-          {/* 3. DADOS */}
+          {/* 2. DADOS */}
           <div>
             <SectionTitle icon={<BarChart3 className="h-4 w-4 text-primary" />} title="Dados" />
             <div className="grid grid-cols-2 lg:grid-cols-5 gap-3 mt-3">
@@ -310,7 +276,7 @@ export default function DashboardPage() {
             </div>
           </div>
 
-          {/* 4. RANKINGS */}
+          {/* 3. RANKINGS */}
           <div>
             <SectionTitle icon={<Award className="h-4 w-4 text-primary" />} title="Rankings" />
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 mt-3">
@@ -353,7 +319,7 @@ export default function DashboardPage() {
             </div>
           </div>
 
-          {/* 5. GRÁFICOS */}
+          {/* 4. GRÁFICOS */}
           <div>
             <SectionTitle icon={<BarChart3 className="h-4 w-4 text-primary" />} title="Gráficos" />
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 mt-3">

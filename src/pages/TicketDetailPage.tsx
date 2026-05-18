@@ -1,10 +1,12 @@
 import { useParams, useNavigate } from "react-router-dom";
-import { ArrowLeft, Copy, Clock, Send, Paperclip, UserPlus, ArrowRightLeft, History, Link2, Lock, Unlock, Search, ChevronRight } from "lucide-react";
-import { useState } from "react";
-import { mockTickets, mockUsers } from "@/data/mockData";
-import { StatusBadge, PriorityBadge, CategoryTag } from "@/components/StatusBadge";
+import { ArrowLeft, Copy, Send, Paperclip, UserPlus, ArrowRightLeft, History, Link2, Lock, Unlock, Search, ChevronRight, X } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { StatusBadge, CategoryTag } from "@/components/StatusBadge";
 import { CATEGORY_LABELS, STATUS_LABELS, Status } from "@/types/ticket";
-import { formatTimeAgo, getSLAInfo, getSLAColorClass, formatSLADetailed, copyToClipboard } from "@/lib/ticket-utils";
+import { useDemandTypes } from "@/hooks/useDemandTypes";
+import { useCreateTicketMessage, useTicketMessages, useTicketStatusHistory, useTickets, useUpdateTicketAssignees, useUpdateTicketAttendants, useUpdateTicketStatus } from "@/hooks/useTickets";
+import { useCurrentUser, useProfiles } from "@/hooks/useProfiles";
+import { formatTimeAgo, copyToClipboard } from "@/lib/ticket-utils";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 import {
@@ -22,7 +24,7 @@ import {
 import { ScrollArea } from "@/components/ui/scroll-area";
 
 export default function TicketDetailPage() {
-  const { id } = useParams();
+  const { id: identifier } = useParams();
   const navigate = useNavigate();
   const [message, setMessage] = useState("");
   const [showPanel, setShowPanel] = useState(true);
@@ -30,8 +32,40 @@ export default function TicketDetailPage() {
   const [isInternal, setIsInternal] = useState(false);
   const [showLinkDialog, setShowLinkDialog] = useState(false);
   const [linkSearch, setLinkSearch] = useState("");
+  const [showTransferDialog, setShowTransferDialog] = useState(false);
+  const [showAddAttendantDialog, setShowAddAttendantDialog] = useState(false);
+  const [selectedUserId, setSelectedUserId] = useState<string>("");
+  const { data: tickets = [], isLoading } = useTickets();
+  const ticket = tickets.find((t) => t.id === identifier || t.code === identifier);
+  const resolvedTicketId = ticket?.id;
+  const { data: demandTypes = [] } = useDemandTypes();
+  const { data: profiles = [] } = useProfiles();
+  const { data: currentUser } = useCurrentUser();
+  const { data: statusHistory = [], isLoading: isLoadingHistory } = useTicketStatusHistory(resolvedTicketId);
+  const { data: messages = [], isLoading: isLoadingMessages } = useTicketMessages(resolvedTicketId);
+  const { mutate: createMessage, isPending: isSendingMessage } = useCreateTicketMessage();
+  const { mutate: updateStatus, isPending: isUpdatingStatus } = useUpdateTicketStatus();
+  const { mutate: updateAssignees, isPending: isUpdatingAssignees } = useUpdateTicketAssignees();
+  const { mutate: updateAttendants, isPending: isUpdatingAttendants } = useUpdateTicketAttendants();
+  const messagesEndRef = useRef<HTMLDivElement | null>(null);
+  const categoryLabels = useMemo(() => {
+    const map: Record<string, string> = { ...CATEGORY_LABELS };
+    for (const t of demandTypes) map[t.id] = t.label;
+    return map;
+  }, [demandTypes]);
 
-  const ticket = mockTickets.find((t) => t.id === id);
+  useEffect(() => {
+    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [messages.length]);
+  const profilesById = useMemo(() => new Map(profiles.map((p) => [p.id, p])), [profiles]);
+
+  if (isLoading) {
+    return (
+      <div className="flex items-center justify-center h-screen text-muted-foreground">
+        Carregando...
+      </div>
+    );
+  }
   if (!ticket) {
     return (
       <div className="flex items-center justify-center h-screen text-muted-foreground">
@@ -40,16 +74,80 @@ export default function TicketDetailPage() {
     );
   }
 
-  const sla = getSLAInfo(ticket);
-  const responsavel = mockUsers.find((u) => u.id === ticket.assignees[0]);
-  const attendantUsers = (ticket.attendants || []).map((id) => mockUsers.find((u) => u.id === id)).filter(Boolean);
+  const displayTicketCode = ticket.code || ticket.id;
+  const responsibleId = (ticket.assignees?.[0] || ticket.createdBy) as string;
+  const responsibleUser = profilesById.get(responsibleId);
+  const responsibleName = ticket.assigneeNames?.[0] || responsibleUser?.name || ticket.createdByName;
+  const attendantIds = ticket.attendants || [];
+  const attendants = attendantIds.map((uid) => ({
+    id: uid,
+    name: profilesById.get(uid)?.name || uid,
+    avatar: profilesById.get(uid)?.avatar,
+  }));
+  const demandType = demandTypes.find((t) => t.id === ticket.category);
+  const ticketFields = demandType?.fields ?? [];
+  const extraData = ticket.extraData ?? {};
 
-  const linkableTickets = mockTickets.filter(t => t.id !== ticket.id && t.id.toLowerCase().includes(linkSearch.toLowerCase()) || t.title.toLowerCase().includes(linkSearch.toLowerCase()));
+  const linkableTickets = tickets.filter((t) => {
+    if (t.id === ticket.id) return false;
+    const q = linkSearch.toLowerCase();
+    const searchableCode = (t.code || t.id).toLowerCase();
+    return searchableCode.includes(q) || t.title.toLowerCase().includes(q);
+  });
+
+  const handleChangeStatus = (toStatus: Status) => {
+    if (toStatus === ticket.status) return;
+    updateStatus({ ticketId: ticket.id, fromStatus: ticket.status, toStatus });
+  };
+
+  const handleConfirmTransfer = () => {
+    if (!selectedUserId) return;
+    updateAssignees(
+      { ticketId: ticket.id, assignees: [selectedUserId] },
+      {
+        onSuccess: () => {
+          setShowTransferDialog(false);
+          setSelectedUserId("");
+        },
+      }
+    );
+  };
+
+  const handleConfirmAddAttendant = () => {
+    if (!selectedUserId) return;
+    const next = Array.from(new Set([...(ticket.attendants || []), selectedUserId]));
+    updateAttendants(
+      { ticketId: ticket.id, attendants: next },
+      {
+        onSuccess: () => {
+          setShowAddAttendantDialog(false);
+          setSelectedUserId("");
+        },
+      }
+    );
+  };
+
+  const handleRemoveAttendant = (uid: string) => {
+    const next = (ticket.attendants || []).filter((x) => x !== uid);
+    updateAttendants({ ticketId: ticket.id, attendants: next });
+  };
 
   const handleSend = () => {
-    if (!message.trim()) return;
-    toast.success(isInternal ? "Mensagem interna enviada!" : "Mensagem enviada!");
-    setMessage("");
+    const content = message.trim();
+    if (!content || !ticket?.id || isSendingMessage) return;
+
+    createMessage(
+      {
+        ticketId: ticket.id,
+        content,
+        isInternal,
+      },
+      {
+        onSuccess: () => {
+          setMessage("");
+        },
+      }
+    );
   };
 
   return (
@@ -61,7 +159,7 @@ export default function TicketDetailPage() {
         </button>
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2">
-            <span className="text-[11px] text-muted-foreground">{ticket.id}</span>
+            <span className="text-[11px] text-muted-foreground">{displayTicketCode}</span>
             {ticket.demandType === "socorro" && <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-status-danger/20 text-status-danger">SOCORRO</span>}
             {ticket.demandType === "back" && <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-status-warning/20 text-status-warning">BACK!</span>}
             <StatusBadge status={ticket.status} />
@@ -72,15 +170,16 @@ export default function TicketDetailPage() {
       <div className="flex-1 flex overflow-hidden">
         {/* Left panel */}
         {showPanel && (
-          <aside className="w-72 border-r border-border bg-card overflow-auto shrink-0 animate-fade-in relative">
-            <ScrollArea className="h-full">
+          <div className="relative w-72 shrink-0 animate-fade-in">
+            <aside className="h-full border-r border-border bg-card overflow-auto">
+              <ScrollArea className="h-full">
               <div className="p-4 space-y-4">
                 {/* 1. Ticket + Responsável side by side */}
                 <div className="flex items-start gap-4">
                   <div>
                     <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider mb-1">Ticket</p>
-                    <button onClick={() => { copyToClipboard(ticket.id); toast.success("ID copiado!"); }} className="flex items-center gap-1 text-[13px] font-medium text-foreground hover:text-primary transition-colors">
-                      {ticket.id} <Copy className="h-3 w-3 text-muted-foreground" />
+                    <button onClick={() => { copyToClipboard(displayTicketCode); toast.success("ID copiado!"); }} className="flex items-center gap-1 text-[13px] font-medium text-foreground hover:text-primary transition-colors">
+                      {displayTicketCode} <Copy className="h-3 w-3 text-muted-foreground" />
                     </button>
                   </div>
                   <div>
@@ -88,76 +187,62 @@ export default function TicketDetailPage() {
                     <Tooltip>
                       <TooltipTrigger asChild>
                         <div className="flex items-center gap-1.5 cursor-default">
-                          <div className="h-6 w-6 rounded-full bg-primary/20 flex items-center justify-center text-[9px] font-semibold text-primary">
-                            {ticket.assigneeNames[0]?.split(" ").map((n) => n[0]).join("")}
-                          </div>
-                          <span className="text-[12px] font-medium text-foreground">{ticket.assigneeNames[0]?.split(" ")[0]}</span>
+                          {responsibleUser?.avatar ? (
+                            <img
+                              src={responsibleUser.avatar}
+                              alt={responsibleName}
+                              className="h-6 w-6 rounded-full object-cover shrink-0"
+                            />
+                          ) : (
+                            <div className="h-6 w-6 rounded-full bg-primary/20 flex items-center justify-center text-[9px] font-semibold text-primary">
+                              {responsibleName?.split(" ").map((n) => n[0]).join("")}
+                            </div>
+                          )}
+                          <span className="text-[12px] font-medium text-foreground">{responsibleName?.split(" ")[0]}</span>
                         </div>
                       </TooltipTrigger>
                       <TooltipContent>
-                        <p>{ticket.assigneeNames[0]}</p>
-                        {responsavel?.rating && <p className="text-[11px]">Nota: {responsavel.rating.toFixed(1)}</p>}
+                        <p>{responsibleName}</p>
                       </TooltipContent>
                     </Tooltip>
                   </div>
                 </div>
 
-                {/* 2. Título */}
-                <div>
-                  <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider mb-1">Título</p>
-                  <p className="text-[12px] text-foreground leading-relaxed">{ticket.title}</p>
-                </div>
-
-                {/* 3. Descrição */}
-                <div>
-                  <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider mb-1">Descrição</p>
-                  <p className="text-[12px] text-muted-foreground leading-relaxed">{ticket.description}</p>
-                </div>
-
-                {/* 4. PL + Prioridade side by side */}
-                <div className="flex gap-3">
-                  <div>
-                    <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider mb-1">PL</p>
-                    <p className="text-[12px] text-foreground">{ticket.clientPL}</p>
-                  </div>
-                  <div>
-                    <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider mb-1">Prioridade</p>
-                    <PriorityBadge priority={ticket.priority} />
-                  </div>
-                </div>
-
-                {/* SLA */}
-                <div className={cn("rounded-lg p-2.5 border", sla.overdue ? "bg-status-danger/5 border-status-danger/20" : "bg-muted/50 border-border")}>
-                  <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider mb-1">SLA</p>
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <div className={cn("flex items-center gap-1 text-[13px] font-semibold", getSLAColorClass(sla.color))}>
-                        <Clock className="h-3.5 w-3.5" />
-                        {sla.label}
-                      </div>
-                    </TooltipTrigger>
-                    <TooltipContent>{formatSLADetailed(ticket.updatedAt || ticket.createdAt)}</TooltipContent>
-                  </Tooltip>
-                </div>
-
                 {/* 5. Atendente(s) + buttons */}
                 <div>
                   <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider mb-1">Atendente(s)</p>
-                  {attendantUsers.length > 0 ? (
+                  {attendants.length > 0 ? (
                     <div className="space-y-1.5">
-                      {attendantUsers.map((u) => u && (
-                        <Tooltip key={u.id}>
+                      {attendants.map((a) => (
+                        <Tooltip key={a.id}>
                           <TooltipTrigger asChild>
                             <div className="flex items-center gap-2 cursor-default">
-                              <div className="h-6 w-6 rounded-full bg-accent flex items-center justify-center text-[9px] font-semibold text-accent-foreground">
-                                {u.name.split(" ").map((n) => n[0]).join("")}
-                              </div>
-                              <span className="text-[12px] text-foreground">{u.name.split(" ")[0]}</span>
+                              {a.avatar ? (
+                                <img
+                                  src={a.avatar}
+                                  alt={a.name}
+                                  className="h-6 w-6 rounded-full object-cover shrink-0"
+                                />
+                              ) : (
+                                <div className="h-6 w-6 rounded-full bg-accent flex items-center justify-center text-[9px] font-semibold text-accent-foreground">
+                                  {a.name.split(" ").map((n) => n[0]).join("")}
+                                </div>
+                              )}
+                              <span className="text-[12px] text-foreground">{a.name.split(" ")[0]}</span>
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handleRemoveAttendant(a.id);
+                                }}
+                                className="ml-auto p-1 rounded hover:bg-muted text-muted-foreground hover:text-foreground"
+                              >
+                                <X className="h-3 w-3" />
+                              </button>
                             </div>
                           </TooltipTrigger>
                           <TooltipContent>
-                            <p>{u.name}</p>
-                            {u.rating && <p className="text-[11px]">Nota: {u.rating.toFixed(1)}</p>}
+                            <p>{a.name}</p>
                           </TooltipContent>
                         </Tooltip>
                       ))}
@@ -166,10 +251,18 @@ export default function TicketDetailPage() {
                     <p className="text-[11px] text-muted-foreground">Nenhum atendente</p>
                   )}
                   <div className="flex gap-2 mt-2">
-                    <button onClick={() => toast.info("Funcionalidade de transferência em breve")} className="flex-1 h-7 flex items-center justify-center gap-1 rounded-lg border border-border text-[10px] font-medium text-muted-foreground hover:bg-muted transition-colors">
+                    <button
+                      onClick={() => { setSelectedUserId(""); setShowTransferDialog(true); }}
+                      disabled={isUpdatingAssignees}
+                      className="flex-1 h-7 flex items-center justify-center gap-1 rounded-lg border border-border text-[10px] font-medium text-muted-foreground hover:bg-muted transition-colors disabled:opacity-50"
+                    >
                       <ArrowRightLeft className="h-3 w-3" /> Transferir
                     </button>
-                    <button onClick={() => toast.info("Funcionalidade de colaboração em breve")} className="flex-1 h-7 flex items-center justify-center gap-1 rounded-lg border border-border text-[10px] font-medium text-muted-foreground hover:bg-muted transition-colors">
+                    <button
+                      onClick={() => { setSelectedUserId(""); setShowAddAttendantDialog(true); }}
+                      disabled={isUpdatingAttendants}
+                      className="flex-1 h-7 flex items-center justify-center gap-1 rounded-lg border border-border text-[10px] font-medium text-muted-foreground hover:bg-muted transition-colors disabled:opacity-50"
+                    >
                       <UserPlus className="h-3 w-3" /> Adicionar
                     </button>
                   </div>
@@ -178,7 +271,12 @@ export default function TicketDetailPage() {
                 {/* 6. Alterar Status */}
                 <div>
                   <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider mb-1">Alterar Status</p>
-                  <select className="w-full h-8 px-2 text-[12px] bg-muted rounded-lg border-0 text-foreground focus:outline-none focus:ring-1 focus:ring-ring" defaultValue={ticket.status}>
+                  <select
+                    className="w-full h-8 px-2 text-[12px] bg-muted rounded-lg border-0 text-foreground focus:outline-none focus:ring-1 focus:ring-ring disabled:opacity-50"
+                    value={ticket.status}
+                    onChange={(e) => handleChangeStatus(e.target.value as Status)}
+                    disabled={isUpdatingStatus}
+                  >
                     {Object.entries(STATUS_LABELS).map(([key, label]) => (
                       <option key={key} value={key}>{label}</option>
                     ))}
@@ -194,14 +292,18 @@ export default function TicketDetailPage() {
                   </DialogTrigger>
                   <DialogContent className="max-w-md">
                     <DialogHeader>
-                      <DialogTitle className="text-sm">Histórico — {ticket.id}</DialogTitle>
+                      <DialogTitle className="text-sm">Histórico — {displayTicketCode}</DialogTitle>
                     </DialogHeader>
                     <div className="space-y-3 mt-2">
-                      {ticket.statusHistory.map((sh, i) => (
+                      {isLoadingHistory ? (
+                        <div className="py-6 text-center text-[12px] text-muted-foreground">Carregando...</div>
+                      ) : statusHistory.length === 0 ? (
+                        <div className="py-6 text-center text-[12px] text-muted-foreground">Sem histórico ainda.</div>
+                      ) : statusHistory.map((sh, i) => (
                         <div key={sh.id} className="flex gap-2">
                           <div className="flex flex-col items-center">
                             <div className="h-2 w-2 rounded-full bg-primary mt-1" />
-                            {i < ticket.statusHistory.length - 1 && <div className="w-px flex-1 bg-border" />}
+                            {i < statusHistory.length - 1 && <div className="w-px flex-1 bg-border" />}
                           </div>
                           <div className="pb-2">
                             <p className="text-[12px] font-medium text-foreground">{STATUS_LABELS[sh.toStatus]}</p>
@@ -217,15 +319,54 @@ export default function TicketDetailPage() {
                 {/* 8. Categoria */}
                 <div>
                   <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider mb-1">Categoria</p>
-                  <CategoryTag label={CATEGORY_LABELS[ticket.category]} />
+                  <CategoryTag label={categoryLabels[ticket.category] || ticket.category} />
                 </div>
 
-                {/* Cliente */}
+                {/* Campos cadastrados */}
                 <div>
-                  <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider mb-1">Cliente</p>
-                  <button onClick={() => { copyToClipboard(ticket.clientCode); toast.success("Copiado!"); }} className="flex items-center gap-1 text-[12px] text-foreground hover:text-primary transition-colors">
-                    {ticket.clientCode} <Copy className="h-3 w-3 text-muted-foreground" />
-                  </button>
+                  <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider mb-2">Campos</p>
+                  {ticketFields.length === 0 ? (
+                    <p className="text-[11px] text-muted-foreground">Nenhum campo cadastrado para este tipo.</p>
+                  ) : (
+                    <div className="space-y-2">
+                      {ticketFields.map((f) => {
+                        const raw = extraData[f.key];
+                        if (f.fieldType === "attachment") {
+                          const items = Array.isArray(raw) ? raw : raw ? [raw] : [];
+                          return (
+                            <div key={f.id} className="rounded-lg border border-border bg-muted/30 p-2">
+                              <p className="text-[11px] font-medium text-foreground">{f.label}</p>
+                              {items.length === 0 ? (
+                                <p className="text-[11px] text-muted-foreground mt-0.5">—</p>
+                              ) : (
+                                <div className="mt-1 space-y-1">
+                                  {items.map((it: any, idx: number) => (
+                                    <a
+                                      key={`${f.id}-${idx}`}
+                                      href={it?.url}
+                                      target="_blank"
+                                      rel="noreferrer"
+                                      className="block text-[11px] text-primary hover:underline truncate"
+                                    >
+                                      {it?.name || it?.url}
+                                    </a>
+                                  ))}
+                                </div>
+                              )}
+                            </div>
+                          );
+                        }
+
+                        const value = raw === null || raw === undefined ? "" : String(raw).trim();
+                        return (
+                          <div key={f.id} className="rounded-lg border border-border bg-muted/30 p-2">
+                            <p className="text-[11px] font-medium text-foreground">{f.label}</p>
+                            <p className="text-[11px] text-muted-foreground mt-0.5 whitespace-pre-wrap break-words">{value || "—"}</p>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
                 </div>
 
                 {/* Linked tickets */}
@@ -257,22 +398,23 @@ export default function TicketDetailPage() {
                 )}
               </div>
             </ScrollArea>
+            </aside>
 
             {/* Collapse button on right edge */}
             <button
               onClick={() => setShowPanel(false)}
-              className="absolute top-1/2 -right-3 -translate-y-1/2 h-8 w-6 bg-card border border-border rounded-r-lg flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-muted transition-colors z-30 shadow-sm"
+              className="absolute top-1/2 right-0 translate-x-1/2 -translate-y-1/2 h-9 w-7 bg-background border border-border rounded-full flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-muted transition-colors z-30 shadow-sm"
             >
               <ChevronRight className="h-3 w-3 rotate-180" />
             </button>
-          </aside>
+          </div>
         )}
 
         {/* Expand button when panel is hidden */}
         {!showPanel && (
           <button
             onClick={() => setShowPanel(true)}
-            className="absolute top-1/2 left-0 -translate-y-1/2 h-8 w-6 bg-card border border-border rounded-r-lg flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-muted transition-colors z-30 shadow-sm"
+            className="absolute top-1/2 left-0 -translate-x-1/2 -translate-y-1/2 h-9 w-7 bg-background border border-border rounded-full flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-muted transition-colors z-30 shadow-sm"
           >
             <ChevronRight className="h-3 w-3" />
           </button>
@@ -282,9 +424,13 @@ export default function TicketDetailPage() {
         <div className="flex-1 flex flex-col min-w-0">
           {/* Chat messages */}
           <div className="flex-1 overflow-auto px-5 py-4 space-y-3">
-            {ticket.messages.length > 0 ? (
-              ticket.messages.map((msg) => {
-                const isSelf = msg.userId === "a1";
+            {isLoadingMessages ? (
+              <div className="flex items-center justify-center h-full">
+                <p className="text-[12px] text-muted-foreground">Carregando mensagens...</p>
+              </div>
+            ) : messages.length > 0 ? (
+              messages.map((msg) => {
+                const isSelf = msg.userId === currentUser?.id;
                 const msgIsInternal = msg.isInternal;
                 return (
                   <div key={msg.id} className={cn("flex", isSelf ? "justify-end" : "justify-start")}>
@@ -310,6 +456,28 @@ export default function TicketDetailPage() {
                       <p className={cn("text-[13px] leading-relaxed", msgIsInternal ? "text-foreground" : isSelf ? "text-primary-foreground" : "text-foreground")}>
                         {msg.content}
                       </p>
+                      {Array.isArray(msg.attachments) && msg.attachments.length > 0 && (
+                        <div className="mt-2 space-y-1">
+                          {msg.attachments.map((attachment, index) => (
+                            <a
+                              key={`${msg.id}-attachment-${index}`}
+                              href={attachment}
+                              target="_blank"
+                              rel="noreferrer"
+                              className={cn(
+                                "block text-[11px] underline underline-offset-2 break-all",
+                                msgIsInternal
+                                  ? "text-foreground"
+                                  : isSelf
+                                    ? "text-primary-foreground"
+                                    : "text-primary"
+                              )}
+                            >
+                              {attachment}
+                            </a>
+                          ))}
+                        </div>
+                      )}
                     </div>
                   </div>
                 );
@@ -319,6 +487,7 @@ export default function TicketDetailPage() {
                 <p className="text-[12px] text-muted-foreground">Nenhuma mensagem ainda. Inicie a conversa abaixo.</p>
               </div>
             )}
+            <div ref={messagesEndRef} />
           </div>
 
           {/* Message input */}
@@ -330,19 +499,29 @@ export default function TicketDetailPage() {
               </div>
             )}
             <div className="flex items-center gap-2">
-              <button className="h-8 w-8 flex items-center justify-center rounded-lg text-muted-foreground hover:bg-muted transition-colors">
+              <button
+                type="button"
+                onClick={() => toast.info("Anexo no chat ainda não foi habilitado.")}
+                className="h-8 w-8 flex items-center justify-center rounded-lg text-muted-foreground hover:bg-muted transition-colors"
+              >
                 <Paperclip className="h-4 w-4" />
               </button>
               <input
                 type="text"
                 value={message}
                 onChange={(e) => setMessage(e.target.value)}
-                onKeyDown={(e) => e.key === "Enter" && handleSend()}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    e.preventDefault();
+                    handleSend();
+                  }
+                }}
                 placeholder={isInternal ? "Mensagem interna..." : "Digite uma mensagem..."}
                 className={cn(
                   "flex-1 h-8 px-3 text-[13px] rounded-lg border-0 placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-ring",
                   isInternal ? "bg-status-warning/5 text-foreground ring-status-warning/30" : "bg-muted text-foreground"
                 )}
+                disabled={isSendingMessage}
               />
               <Tooltip>
                 <TooltipTrigger asChild>
@@ -371,7 +550,11 @@ export default function TicketDetailPage() {
                 <TooltipContent>Vincular ticket</TooltipContent>
               </Tooltip>
 
-              <button onClick={handleSend} className="h-8 w-8 flex items-center justify-center rounded-lg bg-primary text-primary-foreground hover:bg-primary/90 transition-colors">
+              <button
+                onClick={handleSend}
+                disabled={!message.trim() || isSendingMessage}
+                className="h-8 w-8 flex items-center justify-center rounded-lg bg-primary text-primary-foreground hover:bg-primary/90 transition-colors disabled:opacity-50"
+              >
                 <Send className="h-3.5 w-3.5" />
               </button>
             </div>
@@ -398,17 +581,18 @@ export default function TicketDetailPage() {
             <ScrollArea className="h-[280px]">
               <div className="space-y-1.5 pr-2">
                 {linkableTickets.slice(0, 20).map(t => {
-                  const isLinked = ticket.linkedTickets?.includes(t.id);
+                  const targetCode = t.code || t.id;
+                  const isLinked = !!ticket.linkedTickets?.includes(targetCode) || !!ticket.linkedTickets?.includes(t.id);
                   return (
                     <button
                       key={t.id}
-                      onClick={() => { toast.success(`Ticket ${t.id} vinculado!`); setShowLinkDialog(false); }}
+                      onClick={() => { toast.success(`Ticket ${targetCode} vinculado!`); setShowLinkDialog(false); }}
                       className={cn(
                         "w-full flex items-center gap-2 p-2 rounded-lg text-left transition-colors",
                         isLinked ? "bg-primary/10 border border-primary/20" : "hover:bg-muted border border-transparent"
                       )}
                     >
-                      <span className="text-[11px] text-muted-foreground shrink-0">{t.id}</span>
+                      <span className="text-[11px] text-muted-foreground shrink-0">{targetCode}</span>
                       <span className="text-[12px] text-foreground truncate flex-1">{t.title}</span>
                       <StatusBadge status={t.status} />
                       {isLinked && <span className="text-[9px] text-primary font-semibold">Vinculado</span>}
@@ -417,6 +601,88 @@ export default function TicketDetailPage() {
                 })}
               </div>
             </ScrollArea>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={showTransferDialog} onOpenChange={setShowTransferDialog}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle className="text-sm">Transferir responsável</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3 mt-2">
+            <select
+              value={selectedUserId}
+              onChange={(e) => setSelectedUserId(e.target.value)}
+              className="w-full h-9 px-2 text-[13px] bg-muted rounded-lg border-0 text-foreground focus:outline-none focus:ring-1 focus:ring-ring"
+            >
+              <option value="">Selecione...</option>
+              {profiles
+                .filter((p) => p.active)
+                .map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.name}
+                  </option>
+                ))}
+            </select>
+            <div className="flex gap-2 justify-end">
+              <button
+                type="button"
+                onClick={() => setShowTransferDialog(false)}
+                className="h-9 px-3 rounded-lg text-[13px] font-medium bg-muted text-muted-foreground hover:bg-accent transition-colors"
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                onClick={handleConfirmTransfer}
+                disabled={!selectedUserId || isUpdatingAssignees}
+                className="h-9 px-3 rounded-lg text-[13px] font-medium bg-primary text-primary-foreground hover:bg-primary/90 transition-colors disabled:opacity-50"
+              >
+                Transferir
+              </button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={showAddAttendantDialog} onOpenChange={setShowAddAttendantDialog}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle className="text-sm">Adicionar atendente</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3 mt-2">
+            <select
+              value={selectedUserId}
+              onChange={(e) => setSelectedUserId(e.target.value)}
+              className="w-full h-9 px-2 text-[13px] bg-muted rounded-lg border-0 text-foreground focus:outline-none focus:ring-1 focus:ring-ring"
+            >
+              <option value="">Selecione...</option>
+              {profiles
+                .filter((p) => p.active)
+                .map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.name}
+                  </option>
+                ))}
+            </select>
+            <div className="flex gap-2 justify-end">
+              <button
+                type="button"
+                onClick={() => setShowAddAttendantDialog(false)}
+                className="h-9 px-3 rounded-lg text-[13px] font-medium bg-muted text-muted-foreground hover:bg-accent transition-colors"
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                onClick={handleConfirmAddAttendant}
+                disabled={!selectedUserId || isUpdatingAttendants}
+                className="h-9 px-3 rounded-lg text-[13px] font-medium bg-primary text-primary-foreground hover:bg-primary/90 transition-colors disabled:opacity-50"
+              >
+                Adicionar
+              </button>
+            </div>
           </div>
         </DialogContent>
       </Dialog>

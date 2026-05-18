@@ -1,14 +1,14 @@
 import { useState, useMemo } from "react";
 import { useNavigate } from "react-router-dom";
-import { Copy, Clock, AlertTriangle, Filter, MessageSquare, CheckCircle2, X, ArrowUpDown, ArrowUp, ArrowDown, Plus } from "lucide-react";
+import { AlertTriangle, Filter, X, ArrowUpDown, ArrowUp, ArrowDown, Plus } from "lucide-react";
 import { TopBar } from "@/components/TopBar";
-import { StatusBadge, PriorityBadge, CategoryTag } from "@/components/StatusBadge";
+import { StatusBadge, CategoryTag } from "@/components/StatusBadge";
 import { mockUsers } from "@/data/mockData";
 import { useTickets } from "@/hooks/useTickets";
 import { Status, Priority, Category, CATEGORY_LABELS, STATUS_LABELS, PRIORITY_LABELS } from "@/types/ticket";
-import { getSLAInfo, getSLAColorClass, formatSLADetailed, isOverdue, copyToClipboard } from "@/lib/ticket-utils";
+import { isOverdue } from "@/lib/ticket-utils";
 import { cn } from "@/lib/utils";
-import { toast } from "sonner";
+import { useDemandTypes } from "@/hooks/useDemandTypes";
 import {
   Tooltip,
   TooltipContent,
@@ -18,7 +18,6 @@ import { NewDemandModal } from "@/components/NewDemandModal";
 
 const statusFilters: Status[] = ["nova_demanda", "em_analise", "aguardando_retorno", "aguardando_xp", "concluida"];
 const priorityFilters: Priority[] = ["urgente", "alta", "media", "baixa"];
-const categoryFilters: Category[] = ["abertura_conta", "atualizacao_cadastral", "portabilidade", "renda_variavel", "renda_fixa", "seguros", "credito", "pj", "problema_tecnico", "outro"];
 
 function PersonCell({ name, userId }: { name: string; userId: string }) {
   const user = mockUsers.find((u) => u.id === userId);
@@ -111,6 +110,14 @@ export default function DemandsPage() {
   const [isModalOpen, setIsModalOpen] = useState(false);
 
   const { data: tickets = [], isLoading, error } = useTickets();
+  const { data: demandTypes = [] } = useDemandTypes();
+
+  const categoryFilters = useMemo(() => (demandTypes.length > 0 ? demandTypes.map((t) => t.id) : Object.keys(CATEGORY_LABELS)), [demandTypes]);
+  const categoryLabels = useMemo(() => {
+    const map: Record<string, string> = { ...CATEGORY_LABELS };
+    for (const t of demandTypes) map[t.id] = t.label;
+    return map;
+  }, [demandTypes]);
 
   const toggleSort = (field: SortField) => {
     if (sortField === field) {
@@ -170,11 +177,9 @@ export default function DemandsPage() {
   const isShowingCompleted = activeStatus === "concluida";
   const hasActiveFilters = activePriority || activeCategory || activeResponsavel;
 
-  const columns = isShowingCompleted
-    ? ["", "Ticket", "Responsável", "Categoria", "Resumo", "Cliente", "PL", "Prioridade", "Status", "Avaliação"]
-    : ["", "Ticket", "Responsável", "Atendente", "Categoria", "Resumo", "Cliente", "PL", "Prioridade", "SLA", "Status"];
+  const columns = ["Responsável", "Categoria", "Data", "Status"];
 
-  const sortableColumns: Record<string, SortField> = { Prioridade: "priority", SLA: "sla", Status: "status", PL: "pl" };
+  const sortableColumns: Record<string, SortField> = { Status: "status" };
 
   return (
     <div className="flex flex-col h-screen">
@@ -260,7 +265,7 @@ export default function DemandsPage() {
                 <span className="text-[10px] font-semibold text-muted-foreground uppercase">Categoria</span>
                 <select value={activeCategory ?? ""} onChange={(e) => setActiveCategory((e.target.value || null) as Category | null)} className="h-7 px-2 text-[11px] bg-muted rounded-lg border-0 text-foreground focus:outline-none focus:ring-1 focus:ring-ring">
                   <option value="">Todas</option>
-                  {categoryFilters.map((c) => <option key={c} value={c}>{CATEGORY_LABELS[c]}</option>)}
+                  {categoryFilters.map((c) => <option key={c} value={c}>{categoryLabels[c] || c}</option>)}
                 </select>
               </div>
               <div className="w-px h-5 bg-border" />
@@ -318,78 +323,23 @@ export default function DemandsPage() {
                 <tbody>
                   {sortedTickets.map((ticket) => {
                     const overdue = isOverdue(ticket);
-                    const sla = getSLAInfo(ticket);
                     return (
                       <tr
                         key={ticket.id}
-                        onClick={() => navigate(`/ticket/${ticket.id}`)}
+                        onClick={() => navigate(`/ticket/${ticket.code || ticket.id}`)}
                         className={cn(
                           "border-b border-border last:border-0 cursor-pointer transition-colors",
                           overdue ? "bg-status-danger/[0.03] hover:bg-status-danger/[0.06]" : "hover:bg-muted/50"
                         )}
                       >
-                        <td className="px-1 py-2.5 text-center">
-                          {overdue && <div className="h-2 w-2 rounded-full bg-status-danger mx-auto animate-pulse-soft" />}
-                        </td>
-                        <td className="px-3 py-2.5">
-                          <button onClick={(e) => { e.stopPropagation(); copyToClipboard(ticket.id); toast.success("ID copiado!"); }} className="flex items-center gap-1 text-[12px] font-medium text-foreground hover:text-primary transition-colors">
-                            {ticket.id.substring(0, 8)}...<Copy className="h-3 w-3 text-muted-foreground" />
-                          </button>
-                        </td>
                         <td className="px-3 py-2.5">
                           <PersonCell name={ticket.assigneeNames?.[0] || ticket.createdByName} userId={ticket.assignees?.[0] || ticket.createdBy} />
                         </td>
-                        {!isShowingCompleted && (
-                          <td className="px-3 py-2.5">
-                            <AttendantCell names={ticket.attendantNames || []} ids={ticket.attendants || []} />
-                          </td>
-                        )}
-                        <td className="px-3 py-2.5"><CategoryTag label={CATEGORY_LABELS[ticket.category]} /></td>
-                        <td className="px-3 py-2.5">
-                          <div className="flex items-center gap-1.5">
-                            {ticket.demandType === "socorro" && <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-status-danger/20 text-status-danger">SOCORRO</span>}
-                            {ticket.demandType === "back" && <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-status-warning/20 text-status-warning">BACK!</span>}
-                            <span className="font-medium text-foreground truncate">{ticket.title}</span>
-                          </div>
+                        <td className="px-3 py-2.5"><CategoryTag label={categoryLabels[ticket.category] || ticket.category} /></td>
+                        <td className="px-3 py-2.5 text-[12px] text-muted-foreground">
+                          {ticket.createdAt.toLocaleDateString("pt-BR")}
                         </td>
-                        <td className="px-3 py-2.5">
-                          <button onClick={(e) => { e.stopPropagation(); copyToClipboard(ticket.clientCode); toast.success("Código copiado!"); }} className="inline-flex items-center gap-1 text-foreground hover:text-primary transition-colors">
-                            {ticket.clientCode}<Copy className="h-3 w-3 text-muted-foreground" />
-                          </button>
-                        </td>
-                        <td className="px-3 py-2.5 text-muted-foreground">{ticket.clientPL}</td>
-                        <td className="px-3 py-2.5"><PriorityBadge priority={ticket.priority} /></td>
-                        {isShowingCompleted ? (
-                          <>
-                            <td className="px-3 py-2.5"><StatusBadge status={ticket.status} /></td>
-                            <td className="px-3 py-2.5">
-                              {ticket.rating ? (
-                                <div className="flex items-center gap-1 text-[12px]">
-                                  <CheckCircle2 className="h-3 w-3 text-status-success" />
-                                  <span className="font-medium text-status-success">{ticket.rating}/10</span>
-                                </div>
-                              ) : (
-                                <button onClick={(e) => { e.stopPropagation(); const phone = "5511999999999"; const msg = encodeURIComponent(`Olá! A demanda ${ticket.id} foi concluída e está pendente de avaliação.`); window.open(`https://wa.me/${phone}?text=${msg}`, "_blank"); }} className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-medium bg-status-warning/10 text-status-warning border border-status-warning/20 hover:bg-status-warning/20 transition-colors">
-                                  <MessageSquare className="h-3 w-3" />Lembrar
-                                </button>
-                              )}
-                            </td>
-                          </>
-                        ) : (
-                          <>
-                            <td className="px-3 py-2.5">
-                              <Tooltip>
-                                <TooltipTrigger asChild>
-                                  <div className={cn("flex items-center gap-1 text-[12px] font-medium", getSLAColorClass(sla.color))}>
-                                    <Clock className="h-3 w-3" />{sla.label}
-                                  </div>
-                                </TooltipTrigger>
-                                <TooltipContent side="top" className="text-[11px]">{formatSLADetailed(ticket.updatedAt || ticket.createdAt)}</TooltipContent>
-                              </Tooltip>
-                            </td>
-                            <td className="px-3 py-2.5"><StatusBadge status={ticket.status} /></td>
-                          </>
-                        )}
+                        <td className="px-3 py-2.5"><StatusBadge status={ticket.status} /></td>
                       </tr>
                     );
                   })}
